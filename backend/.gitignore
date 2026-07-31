@@ -1,9 +1,10 @@
-backend/venv/
-backend/__pycache__/
-backend/uploads/
-backend/output/
-backend/faiss_index/
-backend/embeddings/
+venv/
+__pycache__/
+
+uploads/
+output/
+embeddings/
+faiss_index/
 
 *.pyc
 .env
