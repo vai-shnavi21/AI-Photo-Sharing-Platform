@@ -1,4 +1,3 @@
-
 import os
 import cv2
 import json
@@ -6,8 +5,6 @@ import numpy as np
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
 from insightface.app import FaceAnalysis
-
-
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -24,51 +21,55 @@ os.makedirs(EVENT_FOLDER, exist_ok=True)
 os.makedirs(SELFIE_FOLDER, exist_ok=True)
 os.makedirs(EMBEDDING_FOLDER, exist_ok=True)
 
-
 DETECTION_MAX_DIM = 1280
 
 
-
 def get_ctx_id():
-    """Use GPU if a CUDA execution provider is actually available, else CPU."""
     try:
         import onnxruntime as ort
-        providers = ort.get_available_providers()
-        if "CUDAExecutionProvider" in providers:
+
+        if "CUDAExecutionProvider" in ort.get_available_providers():
             return 0
     except Exception:
         pass
+
     return -1
 
 
 CTX_ID = get_ctx_id()
 
-app = FaceAnalysis(name="buffalo_l")
+app = None
+selfie_app = None
 
 
-app.prepare(
-    ctx_id=CTX_ID,
-    det_size=(320, 320)
-)
+def get_event_model():
+    global app
+
+    if app is None:
+        app = FaceAnalysis(name="buffalo_s")
+        app.prepare(ctx_id=CTX_ID, det_size=(320, 320))
+
+    return app
 
 
-selfie_app = FaceAnalysis(name="buffalo_l")
-selfie_app.prepare(
-    ctx_id=CTX_ID,
-    det_size=(640, 640)
-)
+def get_selfie_model():
+    global selfie_app
 
-print("InsightFace Models Loaded Successfully")
-print("Using:", "GPU" if CTX_ID == 0 else "CPU")
+    if selfie_app is None:
+        selfie_app = FaceAnalysis(name="buffalo_s")
+        selfie_app.prepare(ctx_id=CTX_ID, det_size=(640, 640))
 
-
+    return selfie_app
 
 
 def resize_for_detection(image, max_dim=DETECTION_MAX_DIM):
     h, w = image.shape[:2]
+
     scale = max_dim / max(h, w)
+
     if scale < 1:
         image = cv2.resize(image, (int(w * scale), int(h * scale)))
+
     return image
 
 
@@ -81,6 +82,7 @@ def read_image(photo):
 def load_existing_mapping():
     if not os.path.exists(MAPPING_PATH):
         return []
+
     with open(MAPPING_PATH, "r") as f:
         return json.load(f)
 
@@ -88,17 +90,11 @@ def load_existing_mapping():
 def load_existing_embeddings():
     if not os.path.exists(EMBEDDING_PATH):
         return None
+
     return np.load(EMBEDDING_PATH).astype("float32")
 
 
-
-
 def process_event_photos(force_reprocess=False):
-    """
-    Generates face embeddings for all event photos.
-    By default, skips photos already present in photo_mapping.json,
-    so re-running after new uploads only processes new photos.
-    """
 
     existing_mapping = [] if force_reprocess else load_existing_mapping()
     existing_embeddings = None if force_reprocess else load_existing_embeddings()
@@ -108,77 +104,56 @@ def process_event_photos(force_reprocess=False):
     all_photos = os.listdir(EVENT_FOLDER)
     photos = [p for p in all_photos if p not in already_processed]
 
-    print(f"Total Photos Found : {len(all_photos)}")
-    print(f"Already Processed  : {len(already_processed)}")
-    print(f"New Photos To Process : {len(photos)}")
-
     if len(photos) == 0:
-        print("Nothing new to process.")
         return False
+
+    model = get_event_model()
 
     new_embeddings = []
     new_photo_names = []
-    new_bounding_boxes = []
+    new_boxes = []
 
-    
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        loaded = list(tqdm(
-            executor.map(read_image, photos),
-            total=len(photos),
-            desc="Reading images"
-        ))
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        loaded = list(executor.map(read_image, photos))
 
-    for photo, image in tqdm(loaded, desc="Detecting faces"):
+    for photo, image in tqdm(loaded):
 
         if image is None:
-            print(f"Skipping (unreadable) {photo}")
             continue
 
         image = resize_for_detection(image)
 
-        faces = app.get(image)
-
-        if len(faces) == 0:
-            print(f"{photo} -> 0 face(s)")
-            continue
+        faces = model.get(image)
 
         for face in faces:
             new_embeddings.append(face.embedding)
             new_photo_names.append(photo)
-            new_bounding_boxes.append(face.bbox.tolist())
+            new_boxes.append(face.bbox.tolist())
 
     if len(new_embeddings) == 0:
-        print("No new faces found.")
         return False
 
-    new_embedding_array = np.array(new_embeddings).astype("float32")
+    new_embeddings = np.array(new_embeddings).astype("float32")
 
-    
-    if existing_embeddings is not None and existing_embeddings.shape[0] > 0:
-        embedding_array = np.vstack([existing_embeddings, new_embedding_array])
+    if existing_embeddings is not None:
+        embeddings = np.vstack([existing_embeddings, new_embeddings])
     else:
-        embedding_array = new_embedding_array
+        embeddings = new_embeddings
 
-    np.save(EMBEDDING_PATH, embedding_array)
+    np.save(EMBEDDING_PATH, embeddings)
 
-    mapping = list(existing_mapping)
+    mapping = existing_mapping
+
     for i in range(len(new_photo_names)):
         mapping.append({
             "photo": new_photo_names[i],
-            "bbox": new_bounding_boxes[i]
+            "bbox": new_boxes[i]
         })
 
     with open(MAPPING_PATH, "w") as f:
         json.dump(mapping, f, indent=4)
 
-    print("=" * 50)
-    print("Embedding Generation Completed")
-    print("=" * 50)
-    print("New Faces Indexed :", len(new_embeddings))
-    print("Total Faces Indexed :", len(mapping))
-
     return True
-
 
 
 def generate_selfie_embedding(selfie_path):
@@ -188,21 +163,16 @@ def generate_selfie_embedding(selfie_path):
     if image is None:
         return None
 
-    faces = selfie_app.get(image)
+    model = get_selfie_model()
+
+    faces = model.get(image)
 
     if len(faces) == 0:
         return None
 
-    
     face = max(
         faces,
-        key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1])
+        key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1])
     )
 
-    embedding = face.embedding.astype("float32")
-
-    return embedding
-
-
-if __name__ == "__main__":
-    process_event_photos()
+    return face.embedding.astype("float32")
