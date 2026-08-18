@@ -444,7 +444,7 @@ def _get_model():
         print("Loading InsightFace model...")
 
         _model = FaceAnalysis(
-            name="buffalo_l",
+            name="buffalo_s",
             providers=["CPUExecutionProvider"],
         )
 
