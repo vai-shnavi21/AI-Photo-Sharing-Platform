@@ -420,7 +420,7 @@ from services.database import connection
 
 
 # Maximum image dimension used for face detection.
-DETECTION_MAX_DIM = 1280
+DETECTION_MAX_DIM = 800
 
 # One shared InsightFace model.
 # It is loaded only when face recognition is actually needed.
