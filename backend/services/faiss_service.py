@@ -1,12 +1,18 @@
+
+
 import os
 import json
 import faiss
 import numpy as np
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-EMBEDDING_FOLDER = os.path.join(BASE_DIR, "embeddings")
-FAISS_FOLDER = os.path.join(BASE_DIR, "faiss_index")
+# Project Paths
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.getenv("APP_DATA_DIR", BASE_DIR)
+
+EMBEDDING_FOLDER = os.path.join(DATA_DIR, "embeddings")
+FAISS_FOLDER = os.path.join(DATA_DIR, "faiss_index")
 
 os.makedirs(FAISS_FOLDER, exist_ok=True)
 
@@ -15,65 +21,116 @@ INDEX_PATH = os.path.join(FAISS_FOLDER, "index.faiss")
 EMBEDDING_PATH = os.path.join(EMBEDDING_FOLDER, "embeddings.npy")
 MAPPING_PATH = os.path.join(EMBEDDING_FOLDER, "photo_mapping.json")
 
-_index = None
-_mapping = None
+
+# In-memory caches 
 
 
-def load_mapping():
-    global _mapping
+_index_cache = None
+_mapping_cache = None
 
-    if _mapping is None:
+
+def get_mapping(force_reload=False):
+    global _mapping_cache
+
+    if _mapping_cache is None or force_reload:
+        if not os.path.exists(MAPPING_PATH):
+            raise FileNotFoundError(
+                f"Mapping file not found at {MAPPING_PATH}. "
+                "Run process_event_photos() first."
+            )
         with open(MAPPING_PATH, "r") as f:
-            _mapping = json.load(f)
+            _mapping_cache = json.load(f)
 
-    return _mapping
+    return _mapping_cache
 
 
-def load_index():
-    global _index
+def get_index(force_reload=False):
+    global _index_cache
 
-    if _index is None:
-        _index = faiss.read_index(INDEX_PATH)
+    if _index_cache is None or force_reload:
+        _index_cache = load_index()
 
-    return _index
+    return _index_cache
+
+
+
+# Create FAISS Index
 
 
 def create_faiss_index():
 
+    if not os.path.exists(EMBEDDING_PATH):
+        raise FileNotFoundError(
+            f"Embeddings not found at {EMBEDDING_PATH}. "
+            "Run process_event_photos() first."
+        )
+
     embeddings = np.load(EMBEDDING_PATH).astype("float32")
+
+    if embeddings.shape[0] == 0:
+        print("No embeddings to index.")
+        return False
 
     faiss.normalize_L2(embeddings)
 
-    index = faiss.IndexFlatIP(embeddings.shape[1])
+    dimension = embeddings.shape[1]
 
-    ids = np.arange(len(embeddings)).astype(np.int64)
+    # Photo IDs are just the row index into photo_mapping.json.
+    # Using IndexIDMap keeps embeddings and mapping tied together explicitly,
+    # instead of relying purely on positional order.
+    photo_ids = np.arange(embeddings.shape[0], dtype=np.int64)
 
-    index = faiss.IndexIDMap(index)
-
-    index.add_with_ids(embeddings, ids)
+    base_index = faiss.IndexFlatIP(dimension)
+    index = faiss.IndexIDMap(base_index)
+    index.add_with_ids(embeddings, photo_ids)
 
     faiss.write_index(index, INDEX_PATH)
 
-    global _index
-    _index = index
+    print("=" * 50)
+    print("FAISS Index Created Successfully")
+    print("Total Faces :", index.ntotal)
+    print("=" * 50)
+
+    # Refresh in-memory caches 
+    global _index_cache, _mapping_cache
+    _index_cache = index
+    _mapping_cache = None  
 
     return True
 
 
+
+# Load FAISS Index
+
+
+def load_index():
+
+    if not os.path.exists(INDEX_PATH):
+        return None
+
+    return faiss.read_index(INDEX_PATH)
+
+
+
+# Search Similar Faces
+
+
 def search_faces(query_embedding, threshold=0.60, top_k=50):
 
-    index = load_index()
+    index = get_index()
 
-    mapping = load_mapping()
+    if index is None:
+        return []
 
-    query = query_embedding.reshape(1, -1).astype("float32")
+    query_embedding = query_embedding.reshape(1, -1).astype("float32")
 
-    faiss.normalize_L2(query)
+    faiss.normalize_L2(query_embedding)
 
-    distances, indices = index.search(query, top_k)
+    distances, indices = index.search(query_embedding, top_k)
 
-    results = []
+    mapping = get_mapping()
 
+    matched = []
     used = set()
 
     for score, idx in zip(distances[0], indices[0]):
@@ -84,6 +141,10 @@ def search_faces(query_embedding, threshold=0.60, top_k=50):
         if score < threshold:
             continue
 
+        if idx >= len(mapping):
+           
+            continue
+
         photo = mapping[idx]["photo"]
 
         if photo in used:
@@ -91,11 +152,18 @@ def search_faces(query_embedding, threshold=0.60, top_k=50):
 
         used.add(photo)
 
-        results.append({
+        matched.append({
             "photo": photo,
             "similarity": round(float(score), 3)
         })
 
-    results.sort(key=lambda x: x["similarity"], reverse=True)
+    matched.sort(key=lambda x: x["similarity"], reverse=True)
 
-    return results
+    return matched
+
+
+def reload_index():
+    """Call after re-running create_faiss_index() so a running service
+    picks up the new index/mapping without a restart."""
+    get_index(force_reload=True)
+    get_mapping(force_reload=True)

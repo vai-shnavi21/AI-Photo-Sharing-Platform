@@ -7,4 +7,6 @@ embeddings/
 faiss_index/
 
 *.pyc
+*.db
+*.log
 .env
