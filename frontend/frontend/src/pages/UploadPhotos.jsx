@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import API from "../services/api";
-import { authHeaders } from "../services/auth";
 
 function UploadPhotos() {
 
@@ -36,8 +35,6 @@ function UploadPhotos() {
 
                     headers: {
 
-                        ...authHeaders(),
-
                         "Content-Type": "multipart/form-data"
 
                     }
@@ -61,21 +58,35 @@ function UploadPhotos() {
     }
 
     return (
-        <main className="content-shell">
-            <section className="page-card">
-                <div className="page-heading">
-                    <div>
-                        <p className="eyebrow">EVENT PHOTOS</p>
-                        <h1>Upload event photos for matching</h1>
-                        <p className="muted">Add all the event images you want scanned for face matches.</p>
-                    </div>
-                </div>
-                <div className="upload-panel">
-                    <input type="file" multiple onChange={(e) => setPhotos(e.target.files)} />
-                    <button className="upload-button" onClick={uploadPhotos}>Upload</button>
-                </div>
-            </section>
-        </main>
+
+        <div style={{textAlign:"center"}}>
+
+            <h2>Upload Event Photos</h2>
+
+            <input
+
+                type="file"
+
+                multiple
+
+                onChange={(e)=>setPhotos(e.target.files)}
+
+            />
+
+            <br/><br/>
+
+            <button
+
+                onClick={uploadPhotos}
+
+            >
+
+                Upload
+
+            </button>
+
+        </div>
+
     );
 
 }
