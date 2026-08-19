@@ -10,7 +10,12 @@ from fastapi.middleware.cors import CORSMiddleware
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOTENV_PATH = os.path.join(BASE_DIR, ".env")
 load_dotenv(DOTENV_PATH)
-from services.cloud_face_service import generate_selfie_embedding_from_cloud, process_cloud_event_photos, search_faces
+# from services.cloud_face_service import generate_selfie_embedding_from_cloud, process_cloud_event_photos, search_faces
+from services.face_service import (
+    generate_selfie_embedding_from_cloud,
+    process_cloud_event_photos,
+    search_faces,
+)
 from services.database import setup_database
 from routes.auth import router as auth_router
 from routes.gallery import router as gallery_router
